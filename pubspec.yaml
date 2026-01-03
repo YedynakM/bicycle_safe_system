@@ -11,8 +11,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   flutter:
     sdk: flutter
-  flutter_map: ^7.0.0 
-  latlong2: ^0.9.1 
+  flutter_map: ^7.0.0         #interactive map
+  latlong2: ^0.9.1            #location
+  http: ^1.2.0                #request for making a path
 
 dev_dependencies:
   flutter_test:
