@@ -11,7 +11,7 @@ class BikeApp extends StatelessWidget {
     return MaterialApp(
       title: 'Bicycle Safe System',
       debugShowCheckedModeBanner: false, 
-      theme: AppTheme.darkTheme, // init theme
+      theme: AppTheme.darkTheme, 
       home: const DashboardPage(),
     );
   }
