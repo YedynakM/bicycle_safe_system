@@ -4,13 +4,16 @@ import 'package:latlong2/latlong.dart';
 
 
 class RouteService {
- final String _baseUrl = 'http://router.project-osrm.org/route/v1/bike';
-  //TODO: Make an option to change from bike to car or foot, 
-  //but i don't think it is needed, because program is for
-  //bicycles or E-scooters.
+  //Implemented option to change between bike or foot(TODO).
+  //Changed server to openstreetmap.de which supports both profiles properly.
+  final String _bikeUrl = 'https://routing.openstreetmap.de/routed-bike/route/v1/driving';
+  final String _footUrl = 'https://routing.openstreetmap.de/routed-foot/route/v1/driving';
 
-  Future<List<LatLng>> getRoute(LatLng start, LatLng end) async {
-    final String url = '$_baseUrl/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
+  Future<List<LatLng>> getRoute(LatLng start, 
+  LatLng end, {String profile = 'bike'}) 
+  async {
+    final String baseUrl = profile == 'foot' ? _footUrl : _bikeUrl;
+    final String url = '$baseUrl/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson';
 
     try {
       final response = await http.get(Uri.parse(url));
@@ -21,8 +24,6 @@ class RouteService {
         if (data['routes'] == null || (data['routes'] as List).isEmpty) {
           return [];
         }
-        
-
         final routes = data['routes'] as List;
         final geometry = routes[0]['geometry'] as Map<String, dynamic>;
         final coordinates = geometry['coordinates'] as List;
