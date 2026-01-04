@@ -30,6 +30,8 @@ class _DashboardPageState extends State<DashboardPage> {
   List<LatLng> _routePoints = [];
   bool _isLoadingRoute = false;
 
+  String _routingProfile = 'foot';
+
   @override
   void dispose() {
     _simulationService.stop();
@@ -37,21 +39,36 @@ class _DashboardPageState extends State<DashboardPage> {
     super.dispose();
   }
 
-  Future<void> _onMapTap(TapPosition tapPosition, LatLng point) async {
-    setState(() {
-      _destination = point;
-      _isLoadingRoute = true;
-    });
+  Future<void> _fetchRoute(LatLng dest) async {
+    setState(() => _isLoadingRoute = true);
+    final realRoute = await _routeService.getRoute(
+      _currentLocation, 
+      dest, 
+      profile: _routingProfile
+    );
 
-    final realRoute = await _routeService.getRoute(_currentLocation, point);
-
     setState(() {
-      _routePoints = realRoute.isNotEmpty ? 
-      realRoute : [_currentLocation, point];
+      _routePoints = 
+      realRoute.isNotEmpty ? realRoute : [_currentLocation, dest];
       _isLoadingRoute = false;
     });
-    
-    if (_currentSpeed > 0) _startSimulation();
+    if (_currentSpeed > 0 && _routePoints.isNotEmpty) {
+       _startSimulation();
+    }
+  }
+
+  void _toggleRoutingMode() {
+    setState(() {
+      _routingProfile = _routingProfile == 'bike' ? 'foot' : 'bike';
+    });
+    if (_destination != null) {
+      _fetchRoute(_destination!);
+    }
+  }
+
+  Future<void> _onMapTap(TapPosition tapPosition, LatLng point) async {
+    setState(() => _destination = point);
+    await _fetchRoute(point);
   }
 
   void _updateSpeed(double value) {
@@ -119,6 +136,21 @@ class _DashboardPageState extends State<DashboardPage> {
             destination: _destination,
             routePoints: _routePoints,
             onTap: _onMapTap,
+          ),
+          Positioned(
+            top: 100, 
+            right: 16,
+            child: FloatingActionButton.small(
+              heroTag: 'mode_toggle', 
+              onPressed: _toggleRoutingMode,
+              backgroundColor: Colors.black87,
+              child: Icon(
+                _routingProfile == 'bike' ? 
+                Icons.directions_bike : Icons.directions_walk,
+                color: _routingProfile == 'bike' ? 
+                Colors.blueAccent : Colors.orangeAccent,
+              ),
+            ),
           ),
           DashboardPanel(
             panelHeight: panelHeight,
