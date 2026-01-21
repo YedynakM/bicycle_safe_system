@@ -3,43 +3,66 @@ import 'package:latlong2/latlong.dart';
 
 class TestSimulationService {
   Timer? _timer;
+  List<LatLng> _currentRoute = [];
+  int _targetNodeIndex = 0;
   LatLng? _currentPosition;
-  
+  final Distance _distanceCalculator = const Distance();
+
   void startSimulation({
     required double speedKmH,
-    required LatLng startPos,
-    LatLng? destination, 
-    required Function(LatLng) onPositionChanged
+    required List<LatLng> route, 
+    required void Function(LatLng) onPositionChanged,
   }) {
-    _timer?.cancel();
-    _currentPosition = startPos;
+    if (_currentRoute != route) {
+      _currentRoute = route;
+      _targetNodeIndex = 1;
+      _currentPosition = route.isNotEmpty ? route[0] : null;
+    }
     
-    if (speedKmH <= 0) return;
+    _timer?.cancel();
+    
+    if (speedKmH <= 0 || _currentRoute.isEmpty || _currentRoute.length < 2)
+    {
+      return;
+    }
 
-    int milliseconds = (1000 / speedKmH * 20).round(); 
-    if (milliseconds < 50) milliseconds = 50;
+    const int updateIntervalMs = 20; 
 
-    _timer = Timer.periodic(Duration(milliseconds: milliseconds), (timer) {
-      if (destination != null && _currentPosition != null) {
-        final double latDiff = destination.latitude - _currentPosition!.latitude;
-        final double lngDiff = destination.longitude - _currentPosition!.longitude;
-        
-        const double step = 0.0001;
-        
-        final double newLat = _currentPosition!.latitude + (latDiff > 0 ? step : -step);
-        final double newLng = _currentPosition!.longitude + (lngDiff > 0 ? step : -step);
+    _timer = Timer.periodic(const Duration(milliseconds: updateIntervalMs), 
+    (timer) {
+      if (_currentPosition == null) return;
 
-        if ((newLat - destination.latitude).abs() < step && (newLng - destination.longitude).abs() < step) {
-           _timer?.cancel();
+      final double speedMetersPerSecond = speedKmH / 3.6;
+      double distanceToTravel = 
+      speedMetersPerSecond * (updateIntervalMs / 1000);
+
+      while (distanceToTravel > 0 && _targetNodeIndex < _currentRoute.length) {
+        final LatLng targetPoint = _currentRoute[_targetNodeIndex];
+        final double distToNextPoint = 
+        _distanceCalculator.as
+        (LengthUnit.Meter, _currentPosition!, targetPoint);
+
+        if (distToNextPoint > distanceToTravel) {
+          final double fraction = distanceToTravel / distToNextPoint;
+          
+          final double newLat = _currentPosition!.latitude + 
+          (targetPoint.latitude - _currentPosition!.latitude) * fraction;
+          final double newLng = _currentPosition!.longitude + 
+          (targetPoint.longitude - _currentPosition!.longitude) * fraction;
+          
+          _currentPosition = LatLng(newLat, newLng);
+          distanceToTravel = 0;
         } else {
-           _currentPosition = LatLng(newLat, newLng);
-           onPositionChanged(_currentPosition!);
+          _currentPosition = targetPoint;
+          distanceToTravel -= distToNextPoint;
+          _targetNodeIndex++;
         }
-      } else {
-        final double newLat = _currentPosition!.latitude + 0.0001;
-        final double newLng = _currentPosition!.longitude + 0.0001;
-        _currentPosition = LatLng(newLat, newLng);
-        onPositionChanged(_currentPosition!);
+      }
+
+      onPositionChanged(_currentPosition!);
+
+      if (_targetNodeIndex >= _currentRoute.length) {
+        stop();
       }
     });
   }
