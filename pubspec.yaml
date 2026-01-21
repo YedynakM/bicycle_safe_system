@@ -14,6 +14,8 @@ dependencies:
   flutter_map: ^7.0.0         #interactive map
   latlong2: ^0.9.1            #location
   http: ^1.2.0                #request for making a path
+  flutter_blue_plus: ^2.1.0
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
