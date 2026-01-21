@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'package:bicycle_safe_system/features/bluetooth/view/scan_page.dart';
 import 'package:bicycle_safe_system/features/dashboard/logic/route_service.dart';
 import 'package:bicycle_safe_system/features/dashboard/logic/test_simulation_service.dart';
 import 'package:bicycle_safe_system/features/dashboard/view/widgets/dashboard_map.dart';
 import 'package:bicycle_safe_system/features/dashboard/view/widgets/dashboard_panel.dart';
-import 'package:bicycle_safe_system/features/dashboard/view/widgets/status_indicator.dart';
+//import 'package:bicycle_safe_system/features/dashboard/view/widgets/status_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -123,11 +124,19 @@ class _DashboardPageState extends State<DashboardPage> {
             ]
           ],
         ),
-        actions: const [
-           StatusIndicator(isConnected: false),
-           SizedBox(width: 16),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bluetooth_searching, color: Colors.blue),
+            tooltip: 'Find a device',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (context) => const ScanPage()),
+              );
+            },
+          ),
         ],
       ),
+
       body: Stack(
         children: [
           DashboardMap(
@@ -157,6 +166,11 @@ class _DashboardPageState extends State<DashboardPage> {
             averageSpeed: _averageSpeed,
             currentSpeed: _currentSpeed,
             onSpeedChanged: _updateSpeed,
+            onBluetoothPressed: () {
+              Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (context) => const ScanPage()),
+              );
+            },
           ),
         ],
       ),
