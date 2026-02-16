@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'package:bicycle_safe_system/features/bluetooth/view/scan_page.dart';
+import 'package:bicycle_safe_system/features/dashboard/logic/geometry_helper.dart';
 import 'package:bicycle_safe_system/features/dashboard/logic/route_service.dart';
 import 'package:bicycle_safe_system/features/dashboard/logic/test_simulation_service.dart';
 import 'package:bicycle_safe_system/features/dashboard/view/widgets/dashboard_map.dart';
 import 'package:bicycle_safe_system/features/dashboard/view/widgets/dashboard_panel.dart';
-//import 'package:bicycle_safe_system/features/dashboard/view/widgets/status_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -15,13 +15,19 @@ class DashboardPage extends StatefulWidget {
   @override
   State<DashboardPage> createState() => _DashboardPageState();
 }
-//TODO: make themes for dashboard and map widgets
+
 class _DashboardPageState extends State<DashboardPage> {
   final MapController _mapController = MapController();
   final TestSimulationService _simulationService = TestSimulationService();
   final RouteService _routeService = RouteService();
-  
+
   Timer? _avgSpeedTimer;
+  Timer? _autoCenterTimer;
+
+  bool _isAutoCenterEnabled = true;
+  double _currentRotation = 0;
+  LatLng? _prevLocation;
+
   double _currentSpeed = 0;
   double _averageSpeed = 0;
   final List<double> _speedHistory = [];
@@ -30,31 +36,92 @@ class _DashboardPageState extends State<DashboardPage> {
   LatLng? _destination;
   List<LatLng> _routePoints = [];
   bool _isLoadingRoute = false;
-
   String _routingProfile = 'foot';
 
   @override
   void dispose() {
     _simulationService.stop();
     _avgSpeedTimer?.cancel();
+    _autoCenterTimer?.cancel();
     super.dispose();
+  }
+
+  void _resetAutoCenterTimer(Duration duration) {
+    _autoCenterTimer?.cancel();
+    _autoCenterTimer = Timer(duration, () {
+      if (mounted) {
+        setState(() {
+          _isAutoCenterEnabled = true;
+          _mapController.move(
+            _currentLocation,
+            _mapController.camera.zoom,
+          );
+          _mapController.rotate(_currentRotation);
+        });
+      }
+    });
+  }
+
+  void _onInteractionStart() {
+    if (_isAutoCenterEnabled) {
+      setState(() => _isAutoCenterEnabled = false);
+    }
+    _autoCenterTimer?.cancel();
+  }
+
+  void _onMapPositionChanged(MapCamera position, bool hasGesture) {
+    if (hasGesture) {
+      _resetAutoCenterTimer(const Duration(seconds: 10));
+    }
+  }
+
+  Future<void> _onMapTap(TapPosition tapPosition, LatLng point) async {
+    setState(() {
+      _destination = point;
+      _isAutoCenterEnabled = false;
+    });
+    await _fetchRoute(point);
   }
 
   Future<void> _fetchRoute(LatLng dest) async {
     setState(() => _isLoadingRoute = true);
+  
+    _simulationService.stop();
+
     final realRoute = await _routeService.getRoute(
-      _currentLocation, 
-      dest, 
-      profile: _routingProfile
+      _currentLocation,
+      dest,
+      profile: _routingProfile,
     );
 
+    if (!mounted) return;
+
     setState(() {
-      _routePoints = 
-      realRoute.isNotEmpty ? realRoute : [_currentLocation, dest];
+      _routePoints = realRoute.isNotEmpty 
+          ? realRoute 
+          : [_currentLocation, dest];
       _isLoadingRoute = false;
+      
+      _isAutoCenterEnabled = true;
+      _prevLocation = null;
     });
+
+    if (_routePoints.length > 1) {
+      final initialBearing = GeometryHelper.calculateBearing(
+        _routePoints[0], 
+        _routePoints[1],
+      );
+      _currentRotation = -initialBearing;
+      
+      _mapController.move(
+        _currentLocation, 
+        _mapController.camera.zoom,
+      );
+      _mapController.rotate(_currentRotation);
+    }
+
     if (_currentSpeed > 0 && _routePoints.isNotEmpty) {
-       _startSimulation();
+      _startSimulation();
     }
   }
 
@@ -65,11 +132,6 @@ class _DashboardPageState extends State<DashboardPage> {
     if (_destination != null) {
       _fetchRoute(_destination!);
     }
-  }
-
-  Future<void> _onMapTap(TapPosition tapPosition, LatLng point) async {
-    setState(() => _destination = point);
-    await _fetchRoute(point);
   }
 
   void _updateSpeed(double value) {
@@ -83,8 +145,8 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         _speedHistory.add(_currentSpeed);
         if (_speedHistory.isNotEmpty) {
-           _averageSpeed = 
-           _speedHistory.reduce((a, b) => a + b) / _speedHistory.length;
+          _averageSpeed =
+              _speedHistory.reduce((a, b) => a + b) / _speedHistory.length;
         }
       });
     });
@@ -92,20 +154,39 @@ class _DashboardPageState extends State<DashboardPage> {
 
   void _startSimulation() {
     _startAverageSpeedCalculation();
+
     _simulationService.startSimulation(
       speedKmH: _currentSpeed,
-      route: _routePoints, 
+      route: _routePoints,
       onPositionChanged: (newPos) {
-        setState(() => _currentLocation = newPos);
-        _mapController.move(newPos, _mapController.camera.zoom);
+        double newRotation = _currentRotation;
+
+        if (_prevLocation != null) {
+          final double bearing = GeometryHelper.calculateBearing(
+            _prevLocation!,
+            newPos,
+          );
+          newRotation = -bearing;
+        }
+
+        setState(() {
+          _prevLocation = _currentLocation;
+          _currentLocation = newPos;
+          _currentRotation = newRotation;
+        });
+
+        if (_isAutoCenterEnabled) {
+          _mapController.move(newPos, _mapController.camera.zoom);
+          _mapController.rotate(newRotation);
+        }
       },
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final panelHeight = 
-    (MediaQuery.of(context).size.height * 0.45).clamp(260.0, 380.0);
+    final panelHeight =
+        (MediaQuery.of(context).size.height * 0.45).clamp(260.0, 380.0);
 
     return Scaffold(
       extendBodyBehindAppBar: true,
@@ -114,29 +195,39 @@ class _DashboardPageState extends State<DashboardPage> {
         elevation: 0,
         title: Row(
           children: [
-            const Text('Bike Monitor', 
-            style: TextStyle(shadows: [Shadow(blurRadius: 5)])),
+            const Text(
+              'Bike Monitor',
+              style: TextStyle(shadows: [Shadow(blurRadius: 5)]),
+            ),
             if (_isLoadingRoute) ...[
-               const SizedBox(width: 10),
-               const SizedBox(width: 15, 
-               height: 15, child: CircularProgressIndicator(strokeWidth: 2, 
-               color: Colors.white))
+              const SizedBox(width: 10),
+              const SizedBox(
+                width: 15,
+                height: 15,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
             ]
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.bluetooth_searching, color: Colors.blue),
-            tooltip: 'Find a device',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (context) => const ScanPage()),
-              );
-            },
-          ),
+          if (!_isAutoCenterEnabled)
+            IconButton(
+              icon: const Icon(Icons.gps_fixed, color: Colors.redAccent),
+              onPressed: () {
+                setState(() => _isAutoCenterEnabled = true);
+                _mapController.move(
+                  _currentLocation,
+                  _mapController.camera.zoom,
+                );
+                _mapController.rotate(_currentRotation);
+                _autoCenterTimer?.cancel();
+              },
+            ),
         ],
       ),
-
       body: Stack(
         children: [
           DashboardMap(
@@ -145,19 +236,23 @@ class _DashboardPageState extends State<DashboardPage> {
             destination: _destination,
             routePoints: _routePoints,
             onTap: _onMapTap,
+            onMapPositionChanged: _onMapPositionChanged,
+            onInteractionStart: _onInteractionStart,
           ),
           Positioned(
-            top: 100, 
+            top: 100,
             right: 16,
             child: FloatingActionButton.small(
-              heroTag: 'mode_toggle', 
+              heroTag: 'mode_toggle',
               onPressed: _toggleRoutingMode,
               backgroundColor: Colors.black87,
               child: Icon(
-                _routingProfile == 'bike' ? 
-                Icons.directions_bike : Icons.directions_walk,
-                color: _routingProfile == 'bike' ? 
-                Colors.blueAccent : Colors.orangeAccent,
+                _routingProfile == 'bike'
+                    ? Icons.directions_bike
+                    : Icons.directions_walk,
+                color: _routingProfile == 'bike'
+                    ? Colors.blueAccent
+                    : Colors.orangeAccent,
               ),
             ),
           ),
@@ -168,7 +263,7 @@ class _DashboardPageState extends State<DashboardPage> {
             onSpeedChanged: _updateSpeed,
             onBluetoothPressed: () {
               Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (context) => const ScanPage()),
+                MaterialPageRoute<void>(builder: (context) => const ScanPage()),
               );
             },
           ),
