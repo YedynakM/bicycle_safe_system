@@ -1,3 +1,4 @@
+// lib/features/dashboard/view/widgets/dashboard_map.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -10,6 +11,7 @@ class DashboardMap extends StatelessWidget {
     required this.onTap,
     required this.onMapPositionChanged,
     required this.onInteractionStart,
+    required this.bearingDegrees,
     this.destination,
     super.key,
   });
@@ -21,61 +23,62 @@ class DashboardMap extends StatelessWidget {
   final void Function(MapCamera, bool) onMapPositionChanged;
   final void Function(TapPosition, LatLng) onTap;
   final VoidCallback onInteractionStart;
+  final double bearingDegrees;
 
   @override
   Widget build(BuildContext context) {
     return Listener(
       onPointerDown: (_) => onInteractionStart(),
       child: FlutterMap(
-      mapController: mapController,
-      options: MapOptions(
-        initialCenter: currentLocation,
-        initialZoom: 15,
-        onTap: onTap,
-        onPositionChanged: (position, hasGesture) {
-
-        },
-      ),
-      children: [
-        TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          userAgentPackageName: 'com.example.bicycle_safe_system',
+        mapController: mapController,
+        options: MapOptions(
+          initialCenter: currentLocation,
+          initialZoom: 15,
+          onTap: onTap,
+          onPositionChanged: onMapPositionChanged,
         ),
-        if (routePoints.isNotEmpty)
-          PolylineLayer(
-            polylines: [
-              Polyline(
-                points: routePoints,
-                strokeWidth: 4,
-                color: Colors.blueAccent,
-              ),
-            ],
+        children: [
+          TileLayer(
+            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName: 'com.example.bicycle_safe_system',
           ),
-        MarkerLayer(
-          markers: [
-            Marker(
-              point: currentLocation,
-              width: 40,
-              height: 40,
-              child: const Icon(
-                Icons.navigation,
-                color: Colors.blue,
-                size: 30,
-                shadows: [Shadow(color: Colors.black54, blurRadius: 5)],
-              ),
+          if (routePoints.isNotEmpty)
+            PolylineLayer(
+              polylines: [
+                Polyline(
+                  points: routePoints,
+                  strokeWidth: 4,
+                  color: Colors.blueAccent,
+                ),
+              ],
             ),
-            if (destination != null)
+          MarkerLayer(
+            markers: [
               Marker(
-                point: destination!,
+                point: currentLocation,
                 width: 40,
                 height: 40,
-                child: const Icon(Icons.location_on, 
-                color: Colors.red, size: 40),
+                child: Transform.rotate(
+                  angle: bearingDegrees * pi / 180.0,
+                  child: const Icon(
+                    Icons.navigation,
+                    color: Colors.blue,
+                    size: 30,
+                    shadows: [Shadow(color: Colors.black54, blurRadius: 5)],
+                  ),
+                ),
               ),
-          ],
-        ),
-      ],
-    )
+              if (destination != null)
+                Marker(
+                  point: destination!,
+                  width: 40,
+                  height: 40,
+                  child: const Icon(Icons.location_on, color: Colors.red, size: 40),
+                ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
