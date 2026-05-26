@@ -22,6 +22,14 @@ final class DeviceReadyState {
   final List<BluetoothService> services;
 }
 
+class BluetoothConnectionException implements Exception {
+  const BluetoothConnectionException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'BluetoothConnectionException: $message';
+}
+
 class AppBluetoothService {
   // ── public getters ──────────────────────────────────────────────────────────
 
@@ -68,35 +76,68 @@ class AppBluetoothService {
 
   // ── scanning ────────────────────────────────────────────────────────────────
 
-  Future<void> startScan({Duration timeout = _kScanDuration}) async {
-    _scanResults.clear();
-    await _scanSub?.cancel();
+Future<void> startScan({Duration timeout = _kScanDuration}) async {
+  if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+    try {
+      await FlutterBluePlus.turnOn();
+      await FlutterBluePlus.adapterState
+          .where((s) => s == BluetoothAdapterState.on)
+          .first
+          .timeout(const Duration(seconds: 8));
+    } on Exception catch (_) {}
 
-    _scanSub = FlutterBluePlus.scanResults.listen(
-      (results) {
-        for (final r in results) {
-          final idx = _scanResults
-              .indexWhere((e) => e.device.remoteId == r.device.remoteId);
-          if (idx == -1) {
-            _scanResults.add(r);
-          } else {
-            _scanResults[idx] = r;
-          }
-        }
-        _scanResultsController.add(List.unmodifiable(_scanResults));
-      },
-      onError: _scanResultsController.addError,
-    );
-
-    await FlutterBluePlus.startScan(timeout: timeout);
+    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+      throw BluetoothConnectionException(
+        'Please turn on Bluetooth in your phone settings.',
+      );
+    }
   }
 
-  Future<void> stopScan() async {
+  _scanResults.clear();
+  await _scanSub?.cancel();
+  _scanSub = null;
+
+  try {
     await FlutterBluePlus.stopScan();
+  } on Exception catch (_) {}
+
+  _scanSub = FlutterBluePlus.scanResults.listen(
+    (results) {
+      for (final r in results) {
+        final idx = _scanResults
+            .indexWhere((e) => e.device.remoteId == r.device.remoteId);
+        if (idx == -1) {
+          _scanResults.add(r);
+        } else {
+          _scanResults[idx] = r;
+        }
+      }
+      _scanResultsController.add(List.unmodifiable(_scanResults));
+    },
+    onError: _scanResultsController.addError,
+  );
+
+  try {
+    await FlutterBluePlus.startScan(
+      timeout: timeout,
+      androidUsesFineLocation: true,
+    );
+  } on Exception catch (e) {
     await _scanSub?.cancel();
     _scanSub = null;
+    throw BluetoothConnectionException(
+      'Scan failed: ${e.toString()}',
+    );
   }
+}
 
+Future<void> stopScan() async {
+  try {
+    await FlutterBluePlus.stopScan();
+  } on Exception catch (_) {}
+  await _scanSub?.cancel();
+  _scanSub = null;
+}
   // ── connection ──────────────────────────────────────────────────────────────
 
   /// Connect to [device], discover services, then emit on [deviceReadyStream].
@@ -263,11 +304,3 @@ class AppBluetoothService {
   }
 }
 
-/// Thrown when any phase of the connection sequence fails.
-final class BluetoothConnectionException implements Exception {
-  const BluetoothConnectionException(this.message);
-  final String message;
-
-  @override
-  String toString() => 'BluetoothConnectionException: $message';
-}
