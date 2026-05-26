@@ -25,13 +25,31 @@ final class SpeedUpdated extends DashboardEvent {
   @override
   List<Object?> get props => [speedKmh];
 }
+
 class ClearError extends DashboardEvent {
   const ClearError();
 }
+
 final class BtStateChanged extends DashboardEvent {
   const BtStateChanged(this.btState);
   final Object btState;
 
   @override
   List<Object?> get props => [btState];
+}
+
+final class AutoTurnDetected extends DashboardEvent {
+  const AutoTurnDetected(this.command);
+  final LightCommand command;
+
+  @override
+  List<Object?> get props => [command];
+}
+
+final class AutoTurnReleased extends DashboardEvent {
+  const AutoTurnReleased();
+}
+
+final class ToggleAutoNavigation extends DashboardEvent {
+  const ToggleAutoNavigation();
 }

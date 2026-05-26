@@ -1,4 +1,5 @@
 // lib/features/dashboard/bloc/dashboard_bloc.dart
+
 import 'dart:async';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -8,6 +9,16 @@ import 'package:bicycle_safe_system/features/dashboard/logic/ble_protocol_handle
 import 'package:bicycle_safe_system/features/dashboard/bloc/dashboard_event.dart';
 import 'package:bicycle_safe_system/features/dashboard/bloc/dashboard_state.dart';
 
+Duration _overrideDurationFor(LightCommand command) {
+  switch (command) {
+    case LightCommand.leftTurn:
+    case LightCommand.rightTurn:
+      return const Duration(seconds: 10);
+    default:
+      return const Duration(seconds: 5);
+  }
+}
+
 class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
   DashboardBloc({required BluetoothBloc bluetoothBloc})
       : _bluetoothBloc = bluetoothBloc,
@@ -15,12 +26,14 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
     on<BtStateChanged>(_onBtStateChanged);
     on<SpeedUpdated>(_onSpeedUpdated);
     on<SendLightCommand>(_onSendLightCommand);
+    on<AutoTurnDetected>(_onAutoTurnDetected);
+    on<AutoTurnReleased>(_onAutoTurnReleased);
+    on<ToggleAutoNavigation>(_onToggleAutoNavigation);
     on<ClearError>((_, emit) => emit(state.copyWith(clearError: true)));
+
     _btSub = bluetoothBloc.stream.listen(
       (btState) => add(BtStateChanged(btState)),
     );
-    // Replay the current BT state in case BluetoothConnected was already
-    // emitted before DashboardBloc was created.
     add(BtStateChanged(bluetoothBloc.state));
   }
 
@@ -29,7 +42,11 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
   late final StreamSubscription<Object> _btSub;
   StreamSubscription<double>? _speedSub;
 
-  // ── handlers ────────────────────────────────────────────────────────────────
+  DateTime? _userOverrideUntil;
+
+  bool get _userOverrideActive =>
+      _userOverrideUntil != null &&
+      DateTime.now().isBefore(_userOverrideUntil!);
 
   Future<void> _onBtStateChanged(
     BtStateChanged event,
@@ -46,9 +63,6 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
       ));
 
       try {
-        // Pass the already-discovered services so BleProtocolHandler does NOT
-        // call discoverServices() again — that would cause a second GATT
-        // transaction and potentially crash on some Android versions.
         _protocolHandler = BleProtocolHandler(
           device: btState.device,
           services: btState.services,
@@ -60,6 +74,10 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
           onError: (Object error) =>
               emit(state.copyWith(errorMessage: 'Telemetry error: $error')),
         );
+
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (!isClosed) add(const SendLightCommand(LightCommand.headlight));
+        });
       } on BleProtocolException catch (e) {
         emit(state.copyWith(isConnected: false, errorMessage: e.message));
       }
@@ -70,9 +88,10 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
         isReconnecting: btState.isReconnecting,
         currentSpeedKmh: 0.0,
         clearActiveCommand: true,
+        clearAutoOverride: true,
+        clearUserPreference: true,
       ));
     } else if (btState is BluetoothConnecting) {
-      // Show a "connecting" state in the dashboard while discovery is ongoing.
       emit(state.copyWith(
         isConnected: false,
         isReconnecting: false,
@@ -81,8 +100,41 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
     }
   }
 
-  void _onSpeedUpdated(SpeedUpdated event, Emitter<DashboardState> emit) {
+Future<void> _onSpeedUpdated(
+    SpeedUpdated event,
+    Emitter<DashboardState> emit,
+  ) async {
+    final double previousSpeed = state.currentSpeedKmh;
     emit(state.copyWith(currentSpeedKmh: event.speedKmh));
+
+    if (!state.isConnected || _protocolHandler == null) return;
+
+    if (event.speedKmh <= 0.5 && previousSpeed > 0.5) {
+      final LightCommand? pref = state.activeCommand;
+      try {
+        await _protocolHandler!.sendCommand(LightCommand.stop);
+        emit(state.copyWith(
+          activeCommand: LightCommand.stop,
+          autoOverrideCommand: LightCommand.stop,
+          userPreferenceCommand: pref,
+        ));
+      } on BleProtocolException catch (e) {
+        emit(state.copyWith(errorMessage: e.message));
+      }
+    } else if (event.speedKmh > 0.5 && previousSpeed <= 0.5) {
+      final LightCommand restore =
+          state.userPreferenceCommand ?? LightCommand.headlight;
+      try {
+        await _protocolHandler!.sendCommand(restore);
+        emit(state.copyWith(
+          activeCommand: restore,
+          clearAutoOverride: true,
+          clearUserPreference: true,
+        ));
+      } on BleProtocolException catch (e) {
+        emit(state.copyWith(errorMessage: e.message));
+      }
+    }
   }
 
   Future<void> _onSendLightCommand(
@@ -93,11 +145,97 @@ class DashboardBloc extends Bloc<DashboardEvent, DashboardState> {
       emit(state.copyWith(errorMessage: 'Not connected to ESP32.'));
       return;
     }
+
+    if (event.command == LightCommand.leftTurn ||
+        event.command == LightCommand.rightTurn) {
+      _userOverrideUntil = DateTime.now().add(const Duration(seconds: 5));
+    }
+
     try {
       await _protocolHandler!.sendCommand(event.command);
-      emit(state.copyWith(activeCommand: event.command, clearError: true));
+      emit(state.copyWith(
+        activeCommand: event.command,
+        userPreferenceCommand: event.command,
+        clearAutoOverride: true,
+        clearError: true,
+      ));
     } on BleProtocolException catch (e) {
       emit(state.copyWith(errorMessage: e.message));
+    }
+  }
+
+ Future<void> _onAutoTurnDetected(
+    AutoTurnDetected event,
+    Emitter<DashboardState> emit,
+  ) async {
+    if (!state.isAutoNavigationEnabled) return;
+    if (_userOverrideActive) return;
+    if (state.activeCommand == event.command) return;
+    if (_protocolHandler == null || !state.isConnected) return;
+    //if (state.currentSpeedKmh <= 0.5) return;
+
+    try {
+      await _protocolHandler!.sendCommand(event.command);
+      emit(state.copyWith(
+        activeCommand: event.command,
+        autoOverrideCommand: event.command,
+      ));
+    } on BleProtocolException catch (e) {
+      emit(state.copyWith(errorMessage: e.message));
+    }
+  }
+
+  Future<void> _onAutoTurnReleased(
+    AutoTurnReleased event,
+    Emitter<DashboardState> emit,
+  ) async {
+    if (!state.isAutoNavigationEnabled) return;
+    if (_userOverrideActive) return;
+    if (state.autoOverrideCommand == null) return;
+    if (_protocolHandler == null || !state.isConnected) return;
+
+    final LightCommand restore =
+        state.userPreferenceCommand ?? LightCommand.headlight;
+    try {
+      await _protocolHandler!.sendCommand(restore);
+      emit(state.copyWith(
+        activeCommand: restore,
+        clearAutoOverride: true,
+      ));
+    } on BleProtocolException catch (e) {
+      emit(state.copyWith(errorMessage: e.message));
+    }
+  }
+
+Future<void> _onToggleAutoNavigation(
+    ToggleAutoNavigation event,
+    Emitter<DashboardState> emit,
+  ) async {
+    final bool turningOff = state.isAutoNavigationEnabled;
+    final bool hasAutoTurnActive = turningOff &&
+        state.autoOverrideCommand != null &&
+        (state.activeCommand == LightCommand.leftTurn ||
+            state.activeCommand == LightCommand.rightTurn);
+
+    emit(state.copyWith(
+      isAutoNavigationEnabled: !state.isAutoNavigationEnabled,
+      clearAutoOverride: true,
+    ));
+
+    if (hasAutoTurnActive &&
+        _protocolHandler != null &&
+        state.isConnected) {
+      final LightCommand restore =
+          state.userPreferenceCommand ?? LightCommand.headlight;
+      try {
+        await _protocolHandler!.sendCommand(restore);
+        emit(state.copyWith(
+          activeCommand: restore,
+          clearAutoOverride: true,
+        ));
+      } on BleProtocolException catch (e) {
+        emit(state.copyWith(errorMessage: e.message));
+      }
     }
   }
 

@@ -41,27 +41,35 @@ class BluetoothBloc extends Bloc<BluetoothEvent, BluetoothBlocState> {
   // ── handlers ────────────────────────────────────────────────────────────────
 
   Future<void> _onStartScan(
-    StartScan event,
-    Emitter<BluetoothBlocState> emit,
-  ) async {
-    emit(const BluetoothScanning());
+  StartScan event,
+  Emitter<BluetoothBlocState> emit,
+) async {
+  emit(const BluetoothScanning());
+
+  await _scanResultsSub?.cancel();
+  _scanResultsSub = null;
+
+  _scanResultsSub = _service.scanResultsStream.listen(
+    (results) {
+      if (state is BluetoothScanning) {
+        emit((state as BluetoothScanning).copyWith(results: results));
+      }
+    },
+    onError: (Object e) => emit(BluetoothError(e.toString())),
+  );
+
+  try {
+    await _service.startScan();
+  } on BluetoothConnectionException catch (e) {
     await _scanResultsSub?.cancel();
-
-    _scanResultsSub = _service.scanResultsStream.listen(
-      (results) {
-        if (state is BluetoothScanning) {
-          emit((state as BluetoothScanning).copyWith(results: results));
-        }
-      },
-      onError: (Object e) => emit(BluetoothError(e.toString())),
-    );
-
-    try {
-      await _service.startScan();
-    } on Exception catch (e) {
-      emit(BluetoothError('Scan failed: $e'));
-    }
+    _scanResultsSub = null;
+    emit(BluetoothError(e.message));
+  } on Exception catch (e) {
+    await _scanResultsSub?.cancel();
+    _scanResultsSub = null;
+    emit(BluetoothError('Unexpected error: ${e.toString()}'));
   }
+}
 
   Future<void> _onConnectToDevice(
     ConnectToDevice event,

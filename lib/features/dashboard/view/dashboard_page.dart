@@ -9,6 +9,8 @@ import 'package:bicycle_safe_system/features/dashboard/bloc/dashboard_event.dart
 import 'package:bicycle_safe_system/features/dashboard/bloc/dashboard_state.dart';
 import 'package:bicycle_safe_system/features/dashboard/logic/geometry_helper.dart';
 import 'package:bicycle_safe_system/features/dashboard/logic/route_service.dart';
+import 'package:bicycle_safe_system/features/dashboard/logic/route_analyzer.dart';
+import 'package:bicycle_safe_system/features/dashboard/logic/ble_protocol_handler.dart';
 import 'package:bicycle_safe_system/features/dashboard/logic/test_simulation_service.dart';
 import 'package:bicycle_safe_system/features/dashboard/view/widgets/dashboard_map.dart';
 import 'package:bicycle_safe_system/features/dashboard/view/widgets/dashboard_panel.dart';
@@ -26,9 +28,11 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage>
     with TickerProviderStateMixin {
+      
   final MapController _mapController = MapController();
   final TestSimulationService _simulationService = TestSimulationService();
   final RouteService _routeService = RouteService();
+  final RouteAnalyzer _routeAnalyzer = RouteAnalyzer();
 
   Timer? _avgSpeedTimer;
   Timer? _autoCenterTimer;
@@ -195,32 +199,49 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   void _startSimulation() {
-    _startAverageSpeedCalculation();
-    _simulationService.startSimulation(
-      speedKmH: _currentSpeed,
-      route: _routePoints,
-      onPositionChanged: (newPos) {
-        if (_prevLocation != null) {
-          final bearing =
-              GeometryHelper.calculateBearing(_prevLocation!, newPos);
-          setState(() {
-            _currentBearingDeg = bearing;
-            _prevLocation = _currentLocation;
-            _currentLocation = newPos;
-          });
-          _animateToRotation(-bearing);
-        } else {
-          setState(() {
-            _prevLocation = _currentLocation;
-            _currentLocation = newPos;
-          });
+  _startAverageSpeedCalculation();
+  _simulationService.startSimulation(
+    speedKmH: _currentSpeed,
+    route: _routePoints,
+    onPositionChanged: (newPos) {
+      if (_prevLocation != null) {
+        final bearing =
+            GeometryHelper.calculateBearing(_prevLocation!, newPos);
+        setState(() {
+          _currentBearingDeg = bearing;
+          _prevLocation = _currentLocation;
+          _currentLocation = newPos;
+        });
+        _animateToRotation(-bearing);
+
+        final ManeuverRecommendation rec =
+            _routeAnalyzer.analyzeUpcomingManeuver(
+          newPos,
+          _routePoints,
+          _currentSpeed,
+        );
+
+        final LightCommand? autoCmd =
+            RouteAnalyzer.recommendationToCommand(rec);
+
+        if (autoCmd != null) {
+          context.read<DashboardBloc>().add(AutoTurnDetected(autoCmd));
+        } else if (_routeAnalyzer.isTurnCompleted(newPos, _routePoints)) {
+          context.read<DashboardBloc>().add(const AutoTurnReleased());
         }
-        if (_isAutoCenterEnabled) {
-          _mapController.move(newPos, _mapController.camera.zoom);
-        }
-      },
-    );
-  }
+      } else {
+        setState(() {
+          _prevLocation = _currentLocation;
+          _currentLocation = newPos;
+        });
+      }
+
+      if (_isAutoCenterEnabled) {
+        _mapController.move(newPos, _mapController.camera.zoom);
+      }
+    },
+  );
+}
 
   @override
   Widget build(BuildContext context) {
@@ -352,6 +373,30 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 );
               },
+            ),
+            Positioned(
+              bottom: panelHeight + 8,
+              left: 0,
+              right: 0,
+              child: BlocBuilder<DashboardBloc, DashboardState>(
+                buildWhen: (prev, curr) =>
+                    prev.currentSpeedKmh != curr.currentSpeedKmh ||
+                    prev.isConnected != curr.isConnected,
+                builder: (context, state) {
+                  if (!state.isConnected) return const SizedBox.shrink();
+                  return Center(
+                    child: Text(
+                      'Speed (ESP32): ${state.currentSpeedKmh.toStringAsFixed(1)} km/h',
+                      style: const TextStyle(
+                        color: Colors.red,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        shadows: [Shadow(color: Colors.black, blurRadius: 4)],
+                      ),
+                    ),
+                  );
+                },
+              ),
             ),
           ],
         ),
